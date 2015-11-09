@@ -1,0 +1,10 @@
+{
+    "require": {
+        "zumba/json-serializer": "^1.0",
+        "academe/serializeparser": "^1.0",
+        "symfony/var-dumper": "^2.7"
+    },
+    "config": {
+        "vendor-dir": "plugins"
+    }
+}
