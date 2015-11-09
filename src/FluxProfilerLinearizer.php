@@ -34,6 +34,15 @@ class FluxProfilerLinearizer
      */
     protected $objectMappingIndex = 0;
 
+
+    /**
+     * Array refr index mapping index
+     *
+     * @var integer
+     */
+    protected $arrayRefIndex = 0;
+
+
     /**
      * @var boolean $hasPropertiesVisibility toggle properties visibility has prefix for properties names, {"@type" => "Foo", "private:bar"}
      */
@@ -49,14 +58,16 @@ class FluxProfilerLinearizer
 
 
     /**
-     * linearize the value in JSON
+     * linearize the value as a flattened array
      *
      * @param mixed $value
      * @return array
      */
-    public function flatten($value) {
+    public function flatten($value) 
+    {
         $this->reset();
-        return $this->linearizeData($value);
+        $this->walkReferenceSafe($value, $out);
+        return $out;
     }
 
 
@@ -114,6 +125,36 @@ END;
         return $isReference;
     }
 
+
+    /**
+     * Iterate through objects & arrays while watching upon cylce references.
+     * 
+     * @param  mixed &$val  Input value
+     * @param  mixed &$copy Output linearized clone
+     * @param  array &$parents A reference dict, to detect deeply nested references
+     */
+    public function walkReferenceSafe(&$val, &$copy, array &$parents = array())
+    {
+
+        if (is_object($val)) {
+            $this->linearizeObject($val, $copy, $parents);
+            return;
+        }
+
+        if (is_array($val)) {
+            $this->linearizeArray($val, $copy, $parents);
+            return;
+        }
+
+        if (is_resource($val)) {
+            var_dump($val);
+            $this->linearizeResource($val, $copy, $parents);
+            return;
+        }
+
+        $this->linearizeScalar($val, $copy, $parents);
+    }
+
     /**
      * Parse the data to be json encoded
      *
@@ -121,87 +162,119 @@ END;
      * @return mixed
      * @throws Exception
      */
-    protected function linearizeData($value)
+    protected function linearizeScalar(&$value, &$copy, array &$parents = array())
     {
         if (is_string($value)) {
             if (@json_encode($value) === false) {
-                $value = $this->removeInvalidUtf8Chars($value);
-            }
-            return $value;
-        }
-
-        if (is_scalar($value) || $value === null) {
-            return $value;
-        }
-
-        if (is_resource($value)) {
-            if (get_resource_type($value) === 'stream') {
-                return array_merge(array(
-                    "@type" => "resource:" . get_resource_type($value),
-                ), @stream_get_meta_data($value));
+                $copy = $this->removeInvalidUtf8Chars($value);
             } else {
-                return array(
-                    "@type" => "resource:" . get_resource_type($value),
-                );
+                $copy = $value;
             }
+            return;
         }
 
-        if (is_array($value)) {
-            $this->walkArrayRecursive($value);
-            return $value;
-        }
+        
+        $copy = $value;
 
-        return $this->linearizeObject($value);
     }
 
     /**
-     * [walkArrayRecursive description]
-     * @param  [type] &$array_name [description]
-     * @param  [type] &$temp       [description]
-     * @return [type]              [description]
+     * Parse the data to be json encoded
+     *
+     * @param mixed $value
+     * @return mixed
+     * @throws Exception
      */
-    function walkArrayRecursive(&$arrayName, array &$parents = array())
+    protected function linearizeResource(&$value, &$copy, array &$parents = array())
     {
-        if (is_array($arrayName)) {
-            foreach ($arrayName as $k => &$v){
-                foreach ($parents as &$value) {
-                    $this->isReference($arrayName, $value);
-                    $arrayName[$k] = "*RECURSION*";
-                    continue;
-                }
-                $arrayName[$this->linearizeData($k)] = $this->linearizeData($v);
-                $parents[] = $arrayName;
-                $this->walkArrayRecursive($v, $parents);
-            }
+        if (get_resource_type($value) === 'stream') {
+            $copy = array(
+                "@type" => "resource:" . get_resource_type($value),
+                'infos' => @stream_get_meta_data($value),
+            );
+        } else {
+            $copy = array(
+                "@type" => "resource:" . get_resource_type($value),
+            );
         }
     }
+
+
+    /**
+     * [linearizeArray description]
+     * @param  [type] &$val     [description]
+     * @param  [type] &$copy    [description]
+     * @param  array  &$parents [description]
+     * @return [type]           [description]
+     */
+    public function linearizeArray(&$val, &$copy, array &$parents = array())
+    {
+        $copy = array(
+            "@type" => "array@" . ++$this->arrayRefIndex,
+        );
+
+        $parents[$this->arrayRefIndex] = &$val;
+
+        foreach ($val as $k => &$v) {
+
+            $isRef = false;
+
+            if (!is_array($v) && !is_object($v)) {
+                $this->walkReferenceSafe($v, $copy[$k], $parents);
+                continue;
+            }
+
+            foreach ($parents as $refK => &$p) {
+                if ($this->isReference($v, $p)) {
+                    $copy[$k] = "#array@$refK";
+                    $isRef = true;
+                }
+            }
+            
+            if ($isRef) {
+                continue;
+            }
+
+            $this->walkReferenceSafe($v, $copy[$k], $parents);
+        }
+    }
+
 
     /**
      * Extract the data from an object
      *
-     * @param object $value
+     * @param object $val
+     * @param mixed $copy
      * @return array
      */
-    protected function linearizeObject($value) {
+    protected function linearizeObject(&$val, &$copy, array &$parents = array()) {
 
-        if (is_object($value) && method_exists($value, 'jsonSerialize')) {
-            return $this->linearizeData($value->jsonSerialize());
+        if (is_object($val) && method_exists($val, 'jsonSerialize')) {
+            $this->walkReferenceSafe($val->jsonSerialize(), $copy);
+            return;
         }
 
-        $ref = new ReflectionClass($value);
+        $ref = new ReflectionClass($val);
 
-        if ($this->objectStorage->contains($value)) {
-            return array(self::CLASS_IDENTIFIER_KEY => "#object:" . get_class($value) . '@' . $this->objectStorage[$value]);
+        if ($this->objectStorage->contains($val)) {
+            $copy = array(self::CLASS_IDENTIFIER_KEY => "#object:" . get_class($val) . '@' . $this->objectStorage[$val]);
+            return;
         }
 
-        $this->objectStorage->attach($value, $this->objectMappingIndex++);
+        $this->objectStorage->attach($val, $this->objectMappingIndex++);
 
-        $paramsTolinearize = $this->getObjectProperties($ref, $value);
-        $data = array( 
-            self::CLASS_IDENTIFIER_KEY => "object:" . get_class($value) . '@' . $this->objectStorage[$value]
+        $paramsTolinearize = $this->getObjectProperties($ref, $val);
+
+
+        $copy = array( 
+            self::CLASS_IDENTIFIER_KEY => "object:" . get_class($val) . '@' . $this->objectStorage[$val]
         );
-        $data += array_map(array($this, 'linearizeData'), $this->extractObjectData($value, $ref, $paramsTolinearize));
-        return $data;
+
+        foreach ($paramsTolinearize as $propertyName) {
+            $this->extractProperty($val, $copy, $parents, $ref, $propertyName);
+        }
+
+        // return $data;
     }
 
     /**
@@ -229,51 +302,48 @@ END;
      *
      * @param object $value
      * @param ReflectionClass $ref
-     * @param array $properties
+     * @param array $propertyName
      * @return array
      */
-    protected function extractObjectData($value, $ref, $properties) {
+    protected function extractProperty(&$value, &$copy, array &$parents = array(), $ref, $propertyName) {
 
-        $data = array();
+        try {
+            $pref = 'public:';
+            
+            $propRef = $ref->getProperty($propertyName);
 
-        foreach ($properties as $property) {
-            try {
-                $pref = 'public:';
-                
-                $propRef = $ref->getProperty($property);
-                
-
-                if ($propRef->isProtected()) {
-                    $pref = 'protected:';
-                } else if ($propRef->isPrivate()) {
-                    $pref = 'private:';
-                }
-
-                if ($propRef->isStatic()) {
-                    $pref = '::' . $pref;
-                }
-
-                if (method_exists($propRef, 'setAccessible')) {
-                    $propRef->setAccessible(true);
-                }
-
-                if ($this->hasPropertiesVisibility) {
-                    $data[$pref . $property] = $propRef->getValue($value);
-                } else {
-                    $data[$property] = $propRef->getValue($value);
-                }
-            } catch (ReflectionException $e) {
-                if ($this->hasPropertiesVisibility) {
-                    $data[$pref . $property] = $value->$property;
-                } else {
-                    $data[$property] = $value->$property;
-                }
+            if ($propRef->isProtected()) {
+                $pref = 'protected:';
+            } else if ($propRef->isPrivate()) {
+                $pref = 'private:';
             }
+
+            if ($propRef->isStatic()) {
+                $pref = '::' . $pref;
+            }
+
+            if (method_exists($propRef, 'setAccessible')) {
+                $propRef->setAccessible(true);
+            }
+
+            // if ($this->hasPropertiesVisibility) {
+            //     $this->walkReferenceSafe($propRef->getValue($value), $copy[$pref . $property], $parents);
+            //     // $copy[$pref . $property] = $propRef->getValue($value);
+            // } else {
+            $v = $propRef->getValue($value);
+            $this->walkReferenceSafe($v, $copy[$propertyName], $parents);
+            //     $copy[$property] = $propRef->getValue($value);
+            // }
+        } catch (ReflectionException $e) {
+            // if ($this->hasPropertiesVisibility) {
+            //     $copy[$pref . $property] = $value->$property;
+            // } else {
+            $this->walkReferenceSafe($value->$propertyName, $copy[$propertyName], $parents);
+            // $copy[$property] = $value->$property;
+            // }
         }
 
-        ksort($data);
-
-        return $data;
+        ksort($copy);
     }
 
     /**
@@ -286,6 +356,7 @@ END;
         $this->objectStorage = new SplObjectStorage();
         $this->objectMapping = array();
         $this->objectMappingIndex = 0;
+        $this->arrayRefIndex = 0;
     }
 
 }

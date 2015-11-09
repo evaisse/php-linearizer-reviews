@@ -53,23 +53,25 @@ class Foo
 }
 
 
-function phpserialized2json($data)
-{
-    $s = serialize($data);
-    $ref = [];
-
-
-
-    return $ref;
-}
-
 function &collector() {
   static $collection = array(1);
   return $collection;
 }
+
+$exit = array(
+    'goo' => 'gle',
+);
+
 $collection = &collector();
 $collection[] = 2;
-$collection[] = &collector();
+$collection[] = &$exit;
+$collection[2]["huhu"] = 123;
+$collection[2]["igrio"] = &collector();
+
+$collection[3] = new stdclass();
+$collection[3]->bla = "jkljjl";
+$collection[3]->test = &$exit;
+$collection[3]->bli  = "jkljjl";
 
 
 
@@ -88,60 +90,20 @@ $a->setBar(array(
     'utf8String'    => "été",
     "fopen"         => fopen(__FILE__, 'r'),
     'close'         => function ($r) use ($a) {},
-    "yoyoyoyoyoyo"          => $collection,
+    "yoyoyoyoyoyo"  => $collection,
 ));
 
 $c->setRef($a);
 
 
-// var_dump(debug_zval_dump($collection));exit;
-
-
-// print t('Serialize PHP');
-// var_dump(serialize($a));
-// print t();
-
-
-// print t('Zumba\Util\JsonSerializer');
-// $serializer = new Zumba\Util\JsonSerializer();
-// try {
-//     var_dump($serializer->serialize($a));
-// } catch (Exception $e) {
-
-// }
-// print t();
-
-
-
-ob_start();
-
 print t('Fluxprofiler');
 $linearizer = new FluxProfilerLinearizer();
-var_dump($linearizer->flatten($collection));
-// var_dump(json_encode($linearizer->flatten($a)));
+// var_dump($collection);
+// var_dump($linearizer->flatten($collection));
+$var = $linearizer->flatten($a);
+var_dump($var);
+print json_encode($var, JSON_PRETTY_PRINT) . PHP_EOL;
+print json_last_error_msg() . PHP_EOL;
+
 print t();
-
-
-// print t('serialized2json');
-// $linearizer = new FluxProfilerLinearizer();
-// var_dump($linearizer->flatten($a));
-// print t();
-
-
-// print t('Academe\SerializeParser\Parser');
-// $parser = new \Academe\SerializeParser\Parser();
-// $parsed = $parser->parse(serialize(["Test" => $a]));
-// var_dump($parsed);
-// print t();
-
-
-// print t('Symfony\Component\VarDumper\VarDumper');
-// $linearizer = new \Symfony\Component\VarDumper\VarDumper();
-// $cloner = new \Symfony\Component\VarDumper\Cloner\VarCloner();
-// $dumper = new Dumper();
-// $linearizer->setHandler(function ($var) use ($cloner, $dumper) {
-//     $dumper->dump($cloner->cloneVar($var));
-// });
-// $linearizer->dump($a);
-// print t();
 
