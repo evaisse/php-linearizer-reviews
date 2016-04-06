@@ -5,20 +5,53 @@
 class SerializerDumper
 {
     
-    
+    /**
+     * Working buffer
+     * @var string
+     */
     protected $string;
+
+
+    /**
+     * @var boolean
+     */
+    protected $displayVisibility = false;
     
-        
-    public function flatten($data)
+
+    
+    /**
+     * @param  array $data 
+     * @return object
+     */
+    public function flatten($originalObject)
     {
-        $this->idx      = 0;
+        $data = $originalObject;
+
+        @array_walk_recursive($data, function (&$val, $key) {
+            if (is_object($val) && $val instanceof Closure) {
+                $val = array(
+                    "@type" => "object:".get_class($val)."@0",
+                );
+            }
+            if (is_resource($val)) {
+                if (get_resource_type($val) === 'stream') {
+                    $val = array_merge(array(
+                        "@type" => "resource:".get_resource_type($val),
+                    ), @stream_get_meta_data($val));
+                } else {
+                    $val = array(
+                        "@type" => "resource:".get_resource_type($val),
+                    );
+                }
+            }
+        });
+
         $this->string   = serialize($data);
         $this->idx      = 0;
         $this->refStack = array();
-        $this->ridx     = 0;
-        while ($this->idx < strlen($this->string)) {
-            $this->parseNext();
-        }
+        $this->ridx     = 1;
+        
+        return $this->parseNext();
     }
     
     protected function charCodeAt($index)
@@ -35,18 +68,18 @@ class SerializerDumper
     
     protected function indexOf($char, $idx)
     {
-        strpos($this->string, $char, $idx);
+        return strpos($this->string, $char, $idx);
     }
     
     protected function substr($idx, $del)
     {
-        substr($this->string, $idx, $del);
+        return substr($this->string, $idx, $del);
     }
         
     protected function readLength()
     {
         $del       = $this->indexOf(':', $this->idx);
-        $val       = $this->substr($this->idx, $del);
+        $val       = $this->substr($this->idx, $del - $this->idx);
         $this->idx = $del + 2;
         return intval($val);
     } //end $this->readLength
@@ -89,11 +122,18 @@ class SerializerDumper
     protected function readString()
     {
         $len    = $this->readLength();
+
+        $val = $this->substr($this->idx, $len);
+        $this->idx += $len + 2;
+
+        return $val;
+
+
         $utfLen = 0;
         $bytes  = 0;
-        
+
         while ($bytes < $len) {
-            $ch = $this->charCodeAt($this->idx + $this->utfLen++);
+            $ch = $this->charCodeAt($this->idx + $utfLen++);
             if ($ch <= 0x007F) {
                 $bytes++;
             } else if ($ch > 0x07FF) {
@@ -124,14 +164,19 @@ class SerializerDumper
     protected function readKey()
     {
         $type = $this->readType();
+
         switch ($type) {
             case 'i':
-                return $this->readInt();
+                $key = $this->readInt();
+                break;
             case 's':
-                return $this->readString();
+                $key = $this->readString();
+                break;
             default:
                 throw new SerializerDumperException("Parse Error : Unknown key type '" . $type . "' at position " . ($this->idx - 2));
+                break;
         }
+        return $key;
     }
     
     protected function parseAsArray()
@@ -142,68 +187,62 @@ class SerializerDumper
         $keep        = $resultArray;
         $lref        = $this->ridx++;
         
-        $this->refStack[$lref] = $keep;
+        $resultArray["@type"] = "array@".$this->ridx;
+
+        $this->refStack[$this->ridx++] = $keep;
+
         for ($i = 0; $i < $len; $i++) {
             $key = $this->readKey();
             $val = $this->parseNext();
-            if ($keep === $resultArray && (int) $key === $i) {
-                // store in array version
-                $resultArray . push(val);
-            } else {
-                if ($keep !== $resultHash) {
-                    // found first non-sequential numeric key
-                    // convert existing data to hash
-                    for ($j = 0, $alen = count($resultArray); $j < $alen; $j++) {
-                        $resultHash[$j] = $resultArray[$j];
-                    }
-                    $keep                  = $resultHash;
-                    $this->refStack[$lref] = $keep;
-                }
-                $resultHash[$key] = $val;
-            } //end if
-        } //end for
+            $resultArray[$key] = $val;
+        }
         
         $this->idx++;
-        return $keep;
-    } //end parseAsArray
-    
+        return $resultArray;
+    }
+
+    /**
+     * Fix property regarding the <NUL> char separator
+     * 
+     * @param  string $parsedName
+     * @param  string $baseClassName 
+     * @return string property name
+     */
     protected function fixPropertyName($parsedName, $baseClassName)
     {
-        
-        
-        if ("\u0000" === $parsedName[0]) {
-            // "<NUL>*<NUL>property"
-            // "<NUL>class<NUL>property"
-            $pos = strpos($parsedName, "\u0000", 1);
-            if ($pos > 0) {
-                $class_name = substr($parsedName, 1, $pos);
-                $prop_name  = $parsedName . substr($pos + 1);
+        if (chr(0) === $parsedName[0] && strpos($parsedName, chr(0), 1)) {
+
+            // <NUL>*<NUL>name => protected
+            // <NUL>class<NUL>name => private 
+            $pos = strpos($parsedName, chr(0), 1);
+
+            $className = substr($parsedName, 1, $pos - 1);
+            $propName  = substr($parsedName, $pos + 1);
+
+            if (strpos($parsedName, chr(0)."*".chr(0)) === 0) {
+                // protected
+                return "protected:$propName";
+            } else if ($baseClassName === $className) {
+                // own private
+                return "private:$propName";
+            } else {
+                // private of a descendant
+                return "parent:$propName";
                 
-                if ("*" === $class_name) {
-                    // protected
-                    return $prop_name;
-                } else if ($baseClassName === $class_name) {
-                    // own private
-                    return $prop_name;
-                } else {
-                    // private of a descendant
-                    return $class_name + "::" + $prop_name;
-                    
-                    // On the one hand, we need to prefix property name with
-                    // class name, because parent and child classes both may
-                    // have private property with same name. We don't want
-                    // just to overwrite it and lose something.
-                    //
-                    // On the other hand, property name can be "foo::bar"
-                    //
-                    //     $obj = new stdClass();
-                    //     $obj->{"foo::bar"} = 42;
-                    //     // any user-defined class can do this by default
-                    //
-                    // and such property also can overwrite something.
-                    //
-                    // So, we can to lose something in any way.
-                }
+                // On the one hand, we need to prefix property name with
+                // class name, because parent and child classes both may
+                // have private property with same name. We don't want
+                // just to overwrite it and lose something.
+                //
+                // On the other hand, property name can be "foo::bar"
+                //
+                //     $obj = new stdClass();
+                //     $obj->{"foo::bar"} = 42;
+                //     // any user-defined class can do this by default
+                //
+                // and such property also can overwrite something.
+                //
+                // So, we can to lose something in any way.
             }
         } else {
             // public "property"
@@ -213,11 +252,13 @@ class SerializerDumper
     
     protected function parseAsObject()
     {
-        $obj       = array();
         $lref      = $this->ridx++;
         // HACK last char after closing quote is ':',
         // but not ';' as for normal string
         $clazzname = $this->readString();
+        $obj       = array(
+            "@type" => $clazzname."@".$this->ridx,
+        );
         
         $this->refStack[$lref] = $obj;
         $len                   = $this->readLength();
@@ -236,7 +277,7 @@ class SerializerDumper
         $clazzname = $this->readString();
         $content   = $this->readString();
         return array(
-            "@class" => $clazzname,
+            "@type" => $clazzname."@".$this->ridx,
             "serialized" => $content
         );
     } //end $this->parseAsCustom
@@ -245,9 +286,11 @@ class SerializerDumper
     {
         $ref                           = $this->readInt();
         // php's ref counter is 1-based; our stack is 0-based.
-        $val                           = $this->refStack[$ref - 1];
-        $this->refStack[$this->ridx++] = $val;
-        return $val;
+        // $val                           = $this->refStack[$ref - 1];
+        $this->refStack[$this->ridx++] = $ref;
+        return [
+            "@type" => "ref@" . $this->ridx,
+        ];
     } //end $this->parseAsRefValue
     
     protected function parseAsRef()
@@ -255,7 +298,7 @@ class SerializerDumper
         $ref = $this->readInt();
         // php's ref counter is 1-based; our stack is 0-based.
         return $this->refStack[$ref - 1];
-    } //end $this->parseAsRef
+    }
     
     protected function parseAsNull()
     {
@@ -271,34 +314,45 @@ class SerializerDumper
     protected function parseNext()
     {
         $type = $this->readType();
-        var_dump($type);
+        
         switch ($type) {
             case 'i':
                 return $this->parseAsInt();
+                break;
             case 'd':
                 return $this->parseAsFloat();
+                break;
             case 'b':
                 return $this->parseAsBoolean();
+                break;
             case 's':
                 return $this->parseAsString();
+                break;
             case 'a':
                 return $this->parseAsArray();
+                break;
             case 'O':
                 return $this->parseAsObject();
+                break;
             case 'C':
                 return $this->parseAsCustom();
+                break;
             
             // link to object, which is a $value - affects $this->refStack
             case 'r':
                 return $this->parseAsRefValue();
+                break;
             
             // PHP's reference - DOES NOT affect $this->refStack
             case 'R':
                 return $this->parseAsRef();
+                break;
             case 'N':
                 return $this->parseAsNull();
+                break;
             default:
                 throw new SerializerDumperException("Parse Error: Unknown type '" . $type . "' at position " . ($this->idx - 2), 1);
+                break;
         } //end switch
     }
     

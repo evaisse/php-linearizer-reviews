@@ -1,5 +1,6 @@
 <?php
 
+
 /*
     "O:3:"Foo":2:{s:8:"Foobar";a:4:{s:9:"isoString";s:3:"?t?";s:12:"binaryString";s:6:"4xVAB";s:10:"utf8String";s:5:"été";s:5:"fopen";i:0;}s:6:"*ref";r:1;}"
  */
@@ -38,7 +39,7 @@ class Foo
 {
     private $bar = 666;
 
-    protected $ref;
+    protected $foo;
 
 
     public function setBar($i)
@@ -47,7 +48,7 @@ class Foo
     }
 
     public function setRef(Foo $a) {
-        $this->ref = $a;
+        $this->foo = $a;
     }
 }
 
@@ -66,7 +67,8 @@ function &collector() {
 }
 
 $exit = array(
-    'goo' => 'gle',
+    'goo'       => 'glé',
+    'fileres'   => fopen(__FILE__, 'r'),
 );
 
 $collection = &collector();
@@ -76,14 +78,15 @@ $collection[2]["huhu"] = 123;
 $collection[2]["igrio"] = &collector();
 
 
-// $collection[2]["closureExample"] = function () {
+$collection[2]["closureExample"] = function () {
 
-// };
+};
 
 $collection[3] = new stdclass();
 $collection[3]->bla = "jkljjl";
 $collection[3]->test = &$exit;
 $collection[3]->bli  = "jkl\"i".chr(0)."jjl";
+$collection[4]->foo = new Foo();
 
 
 function isReference(&$xVal,&$yVal) 
@@ -176,6 +179,11 @@ print t();
 
 print t('Using serialization parsing');
 $linearizer = new SerializerDumper();
-var_dump(serialize($collection));
-var_dump($linearizer->flatten($collection));
+print_r($linearizer->flatten($collection));
 print t();
+/*
+a:4:{i:0;i:1;i:1;i:2;i:2;a:3:{s:3:"goo";s:3:"gle";s:4:"huhu";i:123;s:5:"igrio";a:4:{i:0;i:1;i:1;i:2;i:2;R:4;i:3;O:8:"stdClass":3:{s:3:"bla";s:6:"jkljjl";s:4:"test";R:4;s:3:"bli";s:9:"jkl"ijjl";}}}i:3;r:10;}
+ */
+
+
+var_dump(serialize(fopen(__FILE__, 'r')));
