@@ -34,14 +34,12 @@ class FluxProfilerLinearizer
      */
     protected $objectMappingIndex = 0;
 
-
     /**
      * Array refr index mapping index
      *
      * @var integer
      */
     protected $arrayRefIndex = 0;
-
 
     /**
      * @var boolean $hasPropertiesVisibility toggle properties visibility has prefix for properties names, {"@type" => "Foo", "private:bar"}
@@ -326,21 +324,12 @@ END;
                 $propRef->setAccessible(true);
             }
 
-            // if ($this->hasPropertiesVisibility) {
-            //     $this->walkReferenceSafe($propRef->getValue($value), $copy[$pref . $property], $parents);
-            //     // $copy[$pref . $property] = $propRef->getValue($value);
-            // } else {
             $v = $propRef->getValue($value);
             $this->walkReferenceSafe($v, $copy[$propertyName], $parents);
-            //     $copy[$property] = $propRef->getValue($value);
-            // }
+
         } catch (ReflectionException $e) {
-            // if ($this->hasPropertiesVisibility) {
-            //     $copy[$pref . $property] = $value->$property;
-            // } else {
+
             $this->walkReferenceSafe($value->$propertyName, $copy[$propertyName], $parents);
-            // $copy[$property] = $value->$property;
-            // }
         }
 
         ksort($copy);
